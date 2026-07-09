@@ -18,7 +18,7 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   // 建議用 Railway 的「內部」DATABASE_URL(Reference Variable)，不需 SSL。
   // 若你改用「公開」連線字串(DATABASE_PUBLIC_URL / TCP Proxy)，取消下一行:
-  // ssl: { rejectUnauthorized: false },
+  ssl: { rejectUnauthorized: false },
 });
 
 // ---- LINE 設定 (可選，沒設就自動跳過) ----
