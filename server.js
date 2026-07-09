@@ -18,7 +18,7 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   // 建議用 Railway 的「內部」DATABASE_URL(Reference Variable)，不需 SSL。
   // 若你改用「公開」連線字串(DATABASE_PUBLIC_URL / TCP Proxy)，取消下一行:
-  ssl: { rejectUnauthorized: false },
+  // ssl: { rejectUnauthorized: false },
 });
 
 // ---- LINE 設定 (可選，沒設就自動跳過) ----
@@ -124,51 +124,110 @@ async function notifyLine(evt) {
 }
 
 // ---------------------------------------------------------------------------
-// 極簡歷史網頁 (無框架、不花俏，每 3 秒自動更新)
+// 監控網頁：救護醫療風 (亮底、置中、放大、紅十字急救色系)，每 3 秒自動更新
 const PAGE_HTML = `<!doctype html>
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SOS 事件</title>
+<title>SOS 求救監控</title>
 <style>
-  body { font-family: ui-monospace, Menlo, Consolas, monospace;
-         background:#111; color:#eee; margin:0; padding:20px; }
-  h1 { font-size:18px; font-weight:600; margin:0 0 4px; }
-  .sub { color:#888; font-size:12px; margin-bottom:16px; }
-  table { width:100%; border-collapse:collapse; font-size:14px; }
-  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #333; }
-  th { color:#888; font-weight:normal; font-size:12px; }
-  tr:first-child td { color:#4ade80; }
-  .empty { color:#666; padding:24px 10px; }
-  .dot { color:#4ade80; }
+  :root {
+    --red:#e53935; --red-dark:#c62828; --green:#2e9e5b;
+    --bg:#eef3f8; --card:#ffffff; --ink:#16222e; --muted:#6b7a89;
+    --line:#dbe4ee;
+  }
+  * { box-sizing:border-box; }
+  body {
+    font-family:"Segoe UI", system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif;
+    background:var(--bg); color:var(--ink); margin:0;
+    min-height:100vh; display:flex; flex-direction:column; align-items:center;
+    padding:32px 16px;
+  }
+  .wrap { width:100%; max-width:720px; }
+  header { text-align:center; margin-bottom:24px; }
+  .cross {
+    display:inline-flex; align-items:center; justify-content:center;
+    width:56px; height:56px; border-radius:14px; background:var(--red);
+    color:#fff; font-size:38px; font-weight:700; line-height:1; margin-bottom:12px;
+  }
+  h1 { font-size:30px; font-weight:700; margin:0; letter-spacing:1px; }
+  .sub { color:var(--muted); font-size:14px; margin-top:6px; }
+
+  .banner {
+    text-align:center; border-radius:18px; padding:28px 20px; margin-bottom:24px;
+    background:#e8f7ee; border:2px solid #b7e6c9;
+  }
+  .banner.alert { background:#fdecea; border-color:#f6b4ae; }
+  .banner .big { font-size:28px; font-weight:700; }
+  .banner.ok  .big { color:var(--green); }
+  .banner.alert .big { color:var(--red-dark); }
+  .banner .small { font-size:15px; color:var(--muted); margin-top:6px; }
+
+  .card {
+    background:var(--card); border-radius:16px; padding:20px 24px; margin-bottom:14px;
+    border:1px solid var(--line); border-left:6px solid var(--red);
+    box-shadow:0 2px 10px rgba(20,40,60,.05);
+    display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px;
+  }
+  .card.latest { border-left-color:var(--red); background:#fff6f5; }
+  .card .time { font-size:22px; font-weight:700; }
+  .card .meta { font-size:14px; color:var(--muted); margin-top:2px; }
+  .batt {
+    font-size:22px; font-weight:700; padding:6px 16px; border-radius:999px;
+    background:#eef3f8; color:var(--ink);
+  }
+  .batt.low { background:#fdecea; color:var(--red-dark); }
+  .empty { text-align:center; color:var(--muted); font-size:16px; padding:20px; }
 </style>
 </head>
 <body>
-  <h1><span class="dot">&#9679;</span> SOS 事件紀錄</h1>
-  <div class="sub">每 3 秒自動更新 &middot; 資料存於 PostgreSQL</div>
-  <table>
-    <thead>
-      <tr><th>收到時間 (server)</th><th>裝置時間</th><th>電量</th><th>ID</th></tr>
-    </thead>
-    <tbody id="rows"><tr><td class="empty" colspan="4">尚無事件</td></tr></tbody>
-  </table>
+  <div class="wrap">
+    <header>
+      <div class="cross">&#10010;</div>
+      <h1>SOS 求救監控</h1>
+      <div class="sub">每 3 秒自動更新 &middot; 資料存於 PostgreSQL</div>
+    </header>
+    <div id="banner" class="banner ok">
+      <div class="big">系統待命中</div>
+      <div class="small">目前無求救訊號</div>
+    </div>
+    <div id="list"></div>
+  </div>
 <script>
+function fmtTime(iso) {
+  if (!iso) return '-';
+  try { return new Date(iso).toLocaleString('zh-TW', { hour12:false }); }
+  catch (e) { return iso; }
+}
 async function refresh() {
   try {
     const r = await fetch('/api/events');
     const list = await r.json();
-    const tb = document.getElementById('rows');
+    const banner = document.getElementById('banner');
+    const box = document.getElementById('list');
+
     if (!list.length) {
-      tb.innerHTML = '<tr><td class="empty" colspan="4">尚無事件</td></tr>';
+      banner.className = 'banner ok';
+      banner.innerHTML = '<div class="big">系統待命中</div><div class="small">目前無求救訊號</div>';
+      box.innerHTML = '<div class="empty">尚無事件</div>';
       return;
     }
-    tb.innerHTML = list.map(function(e){
-      var batt = (e.battery_pct != null ? e.battery_pct + '%' : '-')
-               + (e.battery_v != null ? ' (' + e.battery_v + 'V)' : '');
-      return '<tr><td>' + (e.received_at||'-') + '</td><td>'
-           + (e.time||'-') + '</td><td>' + batt + '</td><td>'
-           + (e.id||'-') + '</td></tr>';
+
+    var latest = list[0];
+    banner.className = 'banner alert';
+    banner.innerHTML = '<div class="big">&#9888; 收到求救訊號</div>'
+      + '<div class="small">最近一次 &middot; ' + fmtTime(latest.received_at) + '</div>';
+
+    box.innerHTML = list.map(function(e, i){
+      var pct = (e.battery_pct != null ? e.battery_pct + '%' : '-');
+      var low = (e.battery_pct != null && e.battery_pct <= 20) ? ' low' : '';
+      var volt = (e.battery_v != null ? e.battery_v + 'V' : '');
+      return '<div class="card' + (i===0 ? ' latest' : '') + '">'
+        + '<div><div class="time">' + fmtTime(e.received_at) + '</div>'
+        + '<div class="meta">裝置時間 ' + (e.time||'-') + ' &middot; ID ' + (e.id||'-') + '</div></div>'
+        + '<div class="batt' + low + '">' + pct + (volt ? ' &middot; ' + volt : '') + '</div>'
+        + '</div>';
     }).join('');
   } catch (err) {}
 }
