@@ -130,7 +130,7 @@ const PAGE_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Minecraft Server </title>
+<title>SOS Monitor </title>
 <style>
   :root {
     --red:#e53935; --red-dark:#c62828; --green:#2e9e5b;
@@ -203,7 +203,7 @@ const PAGE_HTML = `<!doctype html>
 var I18N = {
   en: {
     htmlLang:'en', docTitle:'SOS Emergency Monitor',
-    title:'SOS Emergency Monitor',
+    title:'Minecraft Server',
     sub:'Auto-refresh every 3s &middot; Stored in PostgreSQL',
     standbyBig:'System on standby', standbySmall:'No emergency signals',
     alertBig:'&#9888; Emergency signal received', latestPrefix:'Latest &middot; ',
