@@ -130,7 +130,7 @@ const PAGE_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SOS Emergency Monitor</title>
+<title>Minecraft Server </title>
 <style>
   :root {
     --red:#e53935; --red-dark:#c62828; --green:#2e9e5b;
