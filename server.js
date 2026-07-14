@@ -90,7 +90,8 @@ async function initDb() {
       ADD COLUMN IF NOT EXISTS lat      DOUBLE PRECISION,
       ADD COLUMN IF NOT EXISTS lng      DOUBLE PRECISION,
       ADD COLUMN IF NOT EXISTS city     TEXT,
-      ADD COLUMN IF NOT EXISTS country  TEXT;
+      ADD COLUMN IF NOT EXISTS country  TEXT,
+      ADD COLUMN IF NOT EXISTS profile  JSONB;
   `);
   console.log('[DB] ready');
 }
@@ -102,10 +103,11 @@ app.post('/api/sos', async (req, res) => {
   const ip = getClientIp(req);
   try {
     const { rows } = await pool.query(
-      `INSERT INTO sos_events (device_id, event_time, battery_v, battery_pct, ip, raw)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO sos_events (device_id, event_time, battery_v, battery_pct, ip, profile, raw)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING pk, received_at`,
-      [b.id || null, b.time || null, b.battery_v ?? null, b.battery_pct ?? null, ip, b]
+      [b.id || null, b.time || null, b.battery_v ?? null, b.battery_pct ?? null, ip,
+       b.profile || null, b]
     );
     const pk    = rows[0].pk;
     const saved = { ...b, pk, received_at: rows[0].received_at };
@@ -166,7 +168,7 @@ app.get('/api/events/detail', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT pk, device_id AS id, event_time AS time, battery_v, battery_pct,
-              ip, city, country, lat, lng, raw, received_at
+              ip, city, country, lat, lng, profile, raw, received_at
        FROM sos_events ORDER BY pk DESC LIMIT 200`
     );
     res.json(rows);
@@ -372,7 +374,9 @@ var I18N = {
     devLogin:'Developer', logout:'Log out',
     loginTitle:'Developer login', pwPlaceholder:'Password',
     login:'Log in', cancel:'Cancel', loginFail:'Wrong password',
-    kIp:'IP', kCoords:'Coords', kRaw:'Raw', del:'Delete', confirmDel:'Delete this event?'
+    kIp:'IP', kCoords:'Coords', kRaw:'Raw', del:'Delete', confirmDel:'Delete this event?',
+    kProfile:'Personal / Medical', pName:'Name', pBlood:'Blood',
+    pAllergy:'Allergy', pCond:'Condition', pIce:'Emergency contact'
   },
   zh: {
     htmlLang:'zh-Hant', docTitle:'SOS 求救監控',
@@ -386,7 +390,9 @@ var I18N = {
     devLogin:'開發者', logout:'登出',
     loginTitle:'開發者登入', pwPlaceholder:'密碼',
     login:'登入', cancel:'取消', loginFail:'密碼錯誤',
-    kIp:'IP', kCoords:'座標', kRaw:'原始', del:'刪除', confirmDel:'確定刪除這筆？'
+    kIp:'IP', kCoords:'座標', kRaw:'原始', del:'刪除', confirmDel:'確定刪除這筆？',
+    kProfile:'個人 / 醫療資訊', pName:'姓名', pBlood:'血型',
+    pAllergy:'過敏', pCond:'病史', pIce:'緊急聯絡'
   }
 };
 var lang = 'en';
@@ -467,6 +473,15 @@ function locLine(e, d) {
   }
   return '<div class="meta">\\uD83D\\uDCCD ' + d.locating + '</div>';
 }
+function profileBlock(p, d) {
+  if (!p) return '';
+  function row(label, val){
+    return val ? '<div class="row"><span class="k">' + label + '</span> ' + esc(val) + '</div>' : '';
+  }
+  return '<div class="row" style="margin-top:8px"><span class="k">' + d.kProfile + '</span></div>'
+    + row(d.pName, p.name) + row(d.pBlood, p.blood) + row(d.pAllergy, p.allergy)
+    + row(d.pCond, p.cond) + row(d.pIce, p.ice);
+}
 function devBlock(e, d) {
   if (!isDev) return '';
   var coords = (e.lat != null && e.lng != null) ? (e.lat + ', ' + e.lng) : '-';
@@ -476,7 +491,8 @@ function devBlock(e, d) {
     + '<div class="row"><span class="k">pk</span> #' + esc(e.pk) + '</div>'
     + '<div class="row"><span class="k">' + d.kIp + '</span> ' + esc(e.ip || '-') + '</div>'
     + '<div class="row"><span class="k">' + d.kCoords + '</span> ' + esc(coords) + '</div>'
-    + '<div class="row"><span class="k">' + d.kRaw + '</span></div>'
+    + profileBlock(e.profile, d)
+    + '<div class="row" style="margin-top:8px"><span class="k">' + d.kRaw + '</span></div>'
     + '<pre>' + esc(raw) + '</pre>'
     + '<button class="del" onclick="delEvent(' + Number(e.pk) + ')">' + d.del + '</button>'
     + '</div>';
