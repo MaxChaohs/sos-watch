@@ -203,7 +203,7 @@ const PAGE_HTML = `<!doctype html>
 var I18N = {
   en: {
     htmlLang:'en', docTitle:'SOS Emergency Monitor',
-    title:'Minecraft Server',
+    title:'Emergency Monitor',
     sub:'Auto-refresh every 3s &middot; Stored in PostgreSQL',
     standbyBig:'System on standby', standbySmall:'No emergency signals',
     alertBig:'&#9888; Emergency signal received', latestPrefix:'Latest &middot; ',
