@@ -1,23 +1,21 @@
 // SOS Watch - Prototype 後端 (Node / Express + PostgreSQL)
 // 主線: 收裝置 POST -> 寫入 DB -> 回 200 -> 網頁從 DB 讀歷史
+// 位置: 收到求救後，背景用來源 IP 反查概略位置，回填該筆（不拖慢求救）
 // LINE: 掛在後面的 fire-and-forget 副作用，用環境變數控制，沒設就跳過
-//
-// DB: Railway 掛一個 PostgreSQL 服務，把它的 DATABASE_URL 以 Reference Variable
-//     加到本服務的 Variables，程式就會從 process.env.DATABASE_URL 讀到。
 
 const express = require('express');
 const { Pool } = require('pg');
+const { getClientIp, lookupLocation } = require('./geo');   // ← 新增：位置 helper
 
 const app = express();
 app.use(express.json());
+app.set('trust proxy', true);   // ← 新增：Railway 在代理後面，這行才拿得到真實來源 IP
 
 const PORT = process.env.PORT || 3000;
 
 // ---- PostgreSQL 連線 ----
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // 建議用 Railway 的「內部」DATABASE_URL(Reference Variable)，不需 SSL。
-  // 若你改用「公開」連線字串(DATABASE_PUBLIC_URL / TCP Proxy)，取消下一行:
   // ssl: { rejectUnauthorized: false },
 });
 
@@ -39,30 +37,51 @@ async function initDb() {
       received_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+
+  // ← 新增：位置欄位。用 ADD COLUMN IF NOT EXISTS，讓已存在的舊表也能補上。
+  await pool.query(`
+    ALTER TABLE sos_events
+      ADD COLUMN IF NOT EXISTS ip       TEXT,
+      ADD COLUMN IF NOT EXISTS lat      DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS lng      DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS city     TEXT,
+      ADD COLUMN IF NOT EXISTS country  TEXT;
+  `);
+
   console.log('[DB] ready');
 }
 
 // ---------------------------------------------------------------------------
 // 裝置上傳 SOS
 app.post('/api/sos', async (req, res) => {
-  const b = req.body || {};
+  const b  = req.body || {};
+  const ip = getClientIp(req);                 // ← 新增：取真實來源 IP
   try {
-    // 先寫入 DB。對呼救裝置來說，200 應該代表「真的存下來了」，
-    // 所以這裡 await；DB 失敗就回錯，裝置螢幕會顯示 FAILED。
+    // 先寫入 DB（含 ip），200 代表「真的存下來了」。位置晚點再回填。
     const { rows } = await pool.query(
-      `INSERT INTO sos_events (device_id, event_time, battery_v, battery_pct, raw)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO sos_events (device_id, event_time, battery_v, battery_pct, ip, raw)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING pk, received_at`,
-      [b.id || null, b.time || null, b.battery_v ?? null, b.battery_pct ?? null, b]
+      [b.id || null, b.time || null, b.battery_v ?? null, b.battery_pct ?? null, ip, b]
     );
 
-    const saved = { ...b, pk: rows[0].pk, received_at: rows[0].received_at };
+    const pk    = rows[0].pk;
+    const saved = { ...b, pk, received_at: rows[0].received_at };
     console.log('[SOS]', JSON.stringify(saved));
 
-    res.status(200).json({ ok: true, pk: rows[0].pk });
+    res.status(200).json({ ok: true, pk });    // ← 手錶立刻拿到回應，不等定位
 
     // 副作用: 失敗不影響上面的 200
     notifyLine(saved).catch(err => console.error('[LINE] failed:', err.message));
+
+    // ← 新增：背景反查位置，完成後回填該筆（監控頁每 3 秒會自動刷出來）
+    lookupLocation(ip).then(loc => {
+      if (!loc) return;
+      pool.query(
+        `UPDATE sos_events SET lat=$1, lng=$2, city=$3, country=$4 WHERE pk=$5`,
+        [loc.lat, loc.lng, loc.city, loc.country, pk]
+      ).catch(err => console.error('[geo] update failed:', err.message));
+    });
   } catch (err) {
     console.error('[SOS] DB insert failed:', err.message);
     res.status(500).json({ ok: false });
@@ -73,7 +92,8 @@ app.post('/api/sos', async (req, res) => {
 app.get('/api/events', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT device_id AS id, event_time AS time, battery_v, battery_pct, received_at
+      `SELECT device_id AS id, event_time AS time, battery_v, battery_pct,
+              city, country, lat, lng, received_at
        FROM sos_events ORDER BY pk DESC LIMIT 100`
     );
     res.json(rows);
@@ -180,6 +200,8 @@ const PAGE_HTML = `<!doctype html>
   .card.latest { border-left-color:var(--red); background:#fff6f5; }
   .card .time { font-size:22px; font-weight:700; }
   .card .meta { font-size:14px; color:var(--muted); margin-top:2px; }
+  .card .meta a { color:var(--red-dark); font-weight:600; text-decoration:none; }
+  .card .meta a:hover { text-decoration:underline; }
   .batt {
     font-size:22px; font-weight:700; padding:6px 16px; border-radius:999px;
     background:#eef3f8; color:var(--ink);
@@ -208,6 +230,7 @@ var I18N = {
     standbyBig:'System on standby', standbySmall:'No emergency signals',
     alertBig:'&#9888; Emergency signal received', latestPrefix:'Latest &middot; ',
     empty:'No events yet', deviceTime:'Device time', idLabel:'ID',
+    viewMap:'view map', locating:'locating\\u2026',
     switchTo:'繁體中文', locale:'en-GB'
   },
   zh: {
@@ -217,6 +240,7 @@ var I18N = {
     standbyBig:'系統待命中', standbySmall:'目前無求救訊號',
     alertBig:'&#9888; 收到求救訊號', latestPrefix:'最近一次 &middot; ',
     empty:'尚無事件', deviceTime:'裝置時間', idLabel:'ID',
+    viewMap:'查看地圖', locating:'定位中\\u2026',
     switchTo:'English', locale:'zh-TW'
   }
 };
@@ -239,6 +263,17 @@ function fmtTime(iso) {
   if (!iso) return '-';
   try { return new Date(iso).toLocaleString(I18N[lang].locale, { hour12:false }); }
   catch (e) { return iso; }
+}
+// 依這筆事件組出「位置」那一行；沒有座標就顯示定位中
+function locLine(e, d) {
+  if (e.lat != null && e.lng != null) {
+    var place = e.city ? (e.city + (e.country ? ', ' + e.country : '')) : (e.lat + ', ' + e.lng);
+    var url = 'https://www.google.com/maps?q=' + e.lat + ',' + e.lng;
+    return '<div class="meta">\\uD83D\\uDCCD ' + place
+      + ' &middot; <a href="' + url + '" target="_blank" rel="noopener">' + d.viewMap + '</a></div>';
+  }
+  // 尚未回填座標（剛送出的幾秒內）
+  return '<div class="meta">\\uD83D\\uDCCD ' + d.locating + '</div>';
 }
 async function refresh() {
   var d = I18N[lang];
@@ -268,7 +303,9 @@ async function refresh() {
       return '<div class="card' + (i===0 ? ' latest' : '') + '">'
         + '<div><div class="time">' + fmtTime(e.received_at) + '</div>'
         + '<div class="meta">' + d.deviceTime + ' ' + (e.time||'-')
-        + ' &middot; ' + d.idLabel + ' ' + (e.id||'-') + '</div></div>'
+        + ' &middot; ' + d.idLabel + ' ' + (e.id||'-') + '</div>'
+        + locLine(e, d)                                   // ← 新增：位置那一行
+        + '</div>'
         + '<div class="batt' + low + '">' + pct + (volt ? ' &middot; ' + volt : '') + '</div>'
         + '</div>';
     }).join('');
