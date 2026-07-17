@@ -27,10 +27,10 @@
 #include <time.h>
 
 // ---------- 使用者要改的設定 ----------
-const char* WIFI_SSID = "MMMAX_2.4G";
-const char* WIFI_PASS = "P83718371";
+const char* WIFI_SSID = "wifi-ssid";
+const char* WIFI_PASS = "password";
 
-const char* SOS_URL   = "https://sos-watch-production.up.railway.app/api/sos";
+const char* SOS_URL   = "https://xxxxxx.up.railway.app/api/sos";
 
 const long  GMT_OFFSET_SEC      = 8 * 3600;   // 台灣 GMT+8
 const int   DAYLIGHT_OFFSET_SEC = 0;
@@ -310,7 +310,8 @@ bool sendSOS() {
 void goToDeepSleep() {
   Serial.println("閒置逾時 -> 深度睡眠");
   Serial.flush();
-
+  
+  gfx->displayOff(); 
   digitalWrite(TFT_BLK, LOW);          // 關背光（省電關鍵）
   gfx->fillScreen(COL_BG);             // 清成黑畫面
   digitalWrite(BAT_VOLT_PIN_EN, LOW);  // 關電量致能，少一點漏電
