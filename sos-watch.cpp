@@ -1,21 +1,21 @@
 /*
- * SOS Watch - Prototype 韌體 (XIAO ESP32-C5 + ST7789 240x240)
- * 顯示用 Arduino_GFX。功能：
- *   1) Wi-Fi 連線指示（右上角訊號格）
- *   2) 求救編號回饋（No. #pk）
- *   3) 醫療資訊頁（長按切換）
- *   4) 個人/醫療資訊隨求救上傳
- *   5) 閒置 60 秒自動深度睡眠，按鈕喚醒  ← 本版新增
+ * SOS Watch - Prototype firmware (XIAO ESP32-C5 + ST7789 240x240)
+ * Display uses Arduino_GFX. Features:
+ *   1) Wi-Fi connection indicator (signal bars, top-right)
+ *   2) SOS event number feedback (No. #pk)
+ *   3) Medical info page (long-press to switch)
+ *   4) Personal/medical info uploaded together with the SOS
+ *   5) Auto deep sleep after 60s idle, wake on button  <- new in this version
  *
- * 按鈕互動：
- *   待機頁 短按 = 送出求救
- *   任一頁 長按 1.5s = 切醫療頁 / 回待機
- *   醫療頁 短按 = 回待機
- *   睡眠後 按一下 = 喚醒（不送求救）；醒來後再按才送
+ * Button interactions:
+ *   Standby page  Short press = send SOS
+ *   Any page      Long press 1.5s = switch to medical page / back to standby
+ *   Medical page  Short press = back to standby
+ *   After sleep   One press = wake (does NOT send SOS); press again to send
  *
- * 函式庫：GFX Library for Arduino (Arduino_GFX)
- * Board : XIAO_ESP32C5
- * 上電前務必接上天線！
+ * Library: GFX Library for Arduino (Arduino_GFX)
+ * Board  : XIAO_ESP32C5
+ * Always connect the antenna before powering on!
  */
 
 #include <Arduino.h>
@@ -26,24 +26,24 @@
 #include <esp_sleep.h>
 #include <time.h>
 
-// ---------- 使用者要改的設定 ----------
+// ---------- Settings the user needs to change ----------
 const char* WIFI_SSID = "wifi-ssid";
 const char* WIFI_PASS = "password";
 
 const char* SOS_URL   = "https://xxxxxx.up.railway.app/api/sos";
 
-const long  GMT_OFFSET_SEC      = 8 * 3600;   // 台灣 GMT+8
+const long  GMT_OFFSET_SEC      = 8 * 3600;   // Taiwan GMT+8
 const int   DAYLIGHT_OFFSET_SEC = 0;
 
-// ---------- 醫療資訊（靜態，填 ASCII；中文需另掛字型）----------
+// ---------- Medical info (static, ASCII only; CJK needs a separate font) ----------
 #define MED_NAME     "Johnny Silver"
 #define MED_BLOOD    "O+"
 #define MED_ALLERGY  "Peanuts"
 #define MED_COND     "Headache"
 #define MED_ICE      "0912-345-678"
 
-// ---------- 腳位 ----------
-#define BTN_PIN     D0            // = GPIO1，深度睡眠喚醒腳
+// ---------- Pins ----------
+#define BTN_PIN     D0            // = GPIO1, deep-sleep wake pin
 #define TFT_SCK     D8
 #define TFT_MOSI    D10
 #define TFT_DC      D6
@@ -53,11 +53,11 @@ const int   DAYLIGHT_OFFSET_SEC = 0;
 #define BAT_VOLT_PIN     6
 #define BAT_VOLT_PIN_EN  26
 
-// ---------- 睡眠設定 ----------
-#define IDLE_TIMEOUT_MS  60000UL   // 閒置 60 秒 -> 深度睡眠
-#define WAKE_GPIO_NUM    1         // D0 對應 GPIO1
+// ---------- Sleep settings ----------
+#define IDLE_TIMEOUT_MS  60000UL   // Idle 60s -> deep sleep
+#define WAKE_GPIO_NUM    1         // D0 maps to GPIO1
 
-// ---------- 顏色 ----------
+// ---------- Colors ----------
 #define COL_BG      RGB565_BLACK
 #define COL_TITLE   0x8410
 #define COL_IDLE    RGB565_CYAN
@@ -66,19 +66,19 @@ const int   DAYLIGHT_OFFSET_SEC = 0;
 #define COL_FAIL    RGB565_RED
 #define COL_TEXT    RGB565_WHITE
 
-// ---------- 顯示物件 ----------
+// ---------- Display objects ----------
 Arduino_DataBus *bus = new Arduino_ESP32SPI(
     TFT_DC, GFX_NOT_DEFINED, TFT_SCK, TFT_MOSI, GFX_NOT_DEFINED);
 Arduino_GFX *gfx = new Arduino_ST7789(
     bus, TFT_RST, 0, true /*IPS*/, 240, 240);
 
-// ---------- 狀態 ----------
+// ---------- State ----------
 enum Page { PAGE_READY, PAGE_MEDICAL };
 Page   currentPage  = PAGE_READY;
 long   lastEventPk  = -1;
 uint32_t eventCounter = 0;
 
-// 按鈕：debounce + 長按偵測
+// Button: debounce + long-press detection
 int  lastReading = HIGH;
 int  btnState    = HIGH;
 unsigned long lastDebounceMs = 0;
@@ -87,9 +87,9 @@ bool actedOnHold = false;
 const unsigned long DEBOUNCE_MS = 40;
 const unsigned long LONG_MS     = 1500;
 
-unsigned long lastActivityMs = 0;   // 最後一次操作時間（給閒置計時用）
+unsigned long lastActivityMs = 0;   // Last activity time (for idle timer)
 
-// ---------- 函式原型 ----------
+// ---------- Function prototypes ----------
 float  readBatteryVolts();
 int    batteryPercent(float v);
 String nowTimeStr();
@@ -306,25 +306,25 @@ bool sendSOS() {
   }
 }
 
-// ---- 進入深度睡眠：關背光、清畫面、設定按鈕喚醒 ----
+// ---- Enter deep sleep: turn off backlight, clear screen, set button wake ----
 void goToDeepSleep() {
-  Serial.println("閒置逾時 -> 深度睡眠");
+  Serial.println("Idle timeout -> deep sleep");
   Serial.flush();
   
   gfx->displayOff(); 
-  digitalWrite(TFT_BLK, LOW);          // 關背光（省電關鍵）
-  gfx->fillScreen(COL_BG);             // 清成黑畫面
-  digitalWrite(BAT_VOLT_PIN_EN, LOW);  // 關電量致能，少一點漏電
+  digitalWrite(TFT_BLK, LOW);          // Turn off backlight (key power saving)
+  gfx->fillScreen(COL_BG);             // Clear to black
+  digitalWrite(BAT_VOLT_PIN_EN, LOW);  // Disable battery-sense enable to cut leakage
 
-  // D0 = GPIO1，按下為 LOW -> 低電位喚醒（此模式會內部上拉此腳）
+  // D0 = GPIO1, pressed = LOW -> wake on low level (this mode enables internal pull-up on the pin)
   esp_deep_sleep_enable_gpio_wakeup(1ULL << WAKE_GPIO_NUM, ESP_GPIO_WAKEUP_GPIO_LOW);
-  esp_deep_sleep_start();              // 睡下去，之後不再執行
+  esp_deep_sleep_start();              // Sleep now; nothing runs after this
 }
 
 void setup() {
   Serial.begin(115200);
 
-  // 是不是被按鈕從深度睡眠叫醒的
+  // Were we woken from deep sleep by the button?
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   bool wokeFromButton = (cause == ESP_SLEEP_WAKEUP_GPIO);
 
@@ -337,9 +337,9 @@ void setup() {
   pinMode(TFT_BLK, OUTPUT);
   digitalWrite(TFT_BLK, HIGH);
 
-  if (!gfx->begin()) Serial.println("gfx->begin() 失敗 — 檢查接線");
+  if (!gfx->begin()) Serial.println("gfx->begin() failed - check wiring");
 
-  // 只有「冷開機」才跑紅綠藍自檢；被按鈕喚醒時跳過，讓喚醒更快
+  // Only run the red/green/blue self-test on a cold boot; skip it on button wake for faster wake-up
   if (!wokeFromButton) {
     gfx->fillScreen(RGB565_RED);   delay(400);
     gfx->fillScreen(RGB565_GREEN); delay(400);
@@ -359,12 +359,12 @@ void setup() {
   currentPage = PAGE_READY;
   redrawCurrent();
 
-  // 消化「喚醒的那次按壓」：等放開，避免被下面的 loop 當成一次求救
+  // Consume the "wake press": wait for release so the loop below doesn't treat it as an SOS
   while (digitalRead(BTN_PIN) == LOW) delay(10);
   lastReading    = HIGH;
   btnState       = HIGH;
   actedOnHold    = false;
-  lastActivityMs = millis();           // 從現在開始算閒置
+  lastActivityMs = millis();           // Start counting idle from now
 }
 
 void loop() {
@@ -375,7 +375,7 @@ void loop() {
 
   if (now - lastDebounceMs > DEBOUNCE_MS && reading != btnState) {
     btnState = reading;
-    lastActivityMs = now;              // 有操作 -> 重置閒置計時
+    lastActivityMs = now;              // Activity -> reset idle timer
     if (btnState == LOW) {
       pressStartMs = now;
       actedOnHold  = false;
@@ -390,7 +390,7 @@ void loop() {
           currentPage = PAGE_READY;
           redrawCurrent();
         }
-        lastActivityMs = millis();     // 動作可能耗時，回來後重置閒置計時
+        lastActivityMs = millis();     // The action may take time; reset idle timer afterward
       }
     }
   }
@@ -399,17 +399,17 @@ void loop() {
     currentPage = (currentPage == PAGE_READY) ? PAGE_MEDICAL : PAGE_READY;
     redrawCurrent();
     actedOnHold = true;
-    lastActivityMs = now;              // 長按也算操作
+    lastActivityMs = now;              // A long press counts as activity too
   }
 
-  // 待機頁每 5 秒刷新
+  // Refresh the standby page every 5s
   static unsigned long lastRefresh = 0;
   if (currentPage == PAGE_READY && btnState == HIGH && now - lastRefresh > 5000) {
     lastRefresh = now;
     redrawCurrent();
   }
 
-  // 閒置逾時且按鈕未按下 -> 深度睡眠
+  // Idle timeout and button not pressed -> deep sleep
   if (btnState == HIGH && now - lastActivityMs > IDLE_TIMEOUT_MS) {
     goToDeepSleep();
   }
