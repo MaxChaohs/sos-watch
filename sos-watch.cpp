@@ -27,6 +27,7 @@
 #include <time.h>
 
 // ---------- Settings the user needs to change ----------
+// 2.4GHz WIFI
 const char* WIFI_SSID = "wifi-ssid";
 const char* WIFI_PASS = "password";
 
